@@ -1,0 +1,29 @@
+{
+  "name": "ideogram",
+  "version": "1.0.0",
+  "description": "TypeScript batch pipeline for Ideogram generation, super-res upscale, and 4K/8K local download",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "tsx src/index.ts",
+    "start:4k": "tsx src/index.ts 4k",
+    "start:8k": "tsx src/index.ts 8k",
+    "generate": "tsx src/index.ts",
+    "quota-test": "node index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.15.1",
+    "dotenv": "^17.4.2",
+    "p-limit": "^7.3.0",
+    "playwright-core": "^1.59.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3"
+  }
+}
