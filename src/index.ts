@@ -30,6 +30,9 @@ type PromptCollection = {
   sourceLines?: string[];
 };
 
+const MAX_RETRIES_PER_PROMPT = 10;
+const RETRY_DELAY_MS = 2000;
+
 function normalizeQuality(value: string | undefined): QualityMode | undefined {
   if (!value) {
     return undefined;
@@ -128,6 +131,33 @@ function parseArgs(argv: string[]): CliArgs {
 
 function previewPrompt(input: string, max = 72): string {
   return input.length <= max ? input : `${input.slice(0, max - 3)}...`;
+}
+
+function createImageStartPacer(delayMs: number) {
+  let lastStartedAt = 0;
+  let queue: Promise<void> = Promise.resolve();
+
+  const sleep = (ms: number) =>
+    new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+  return {
+    waitTurn: async (): Promise<void> => {
+      queue = queue.then(async () => {
+        const now = Date.now();
+        if (lastStartedAt > 0) {
+          const elapsed = now - lastStartedAt;
+          const remaining = delayMs - elapsed;
+          if (remaining > 0) {
+            await sleep(remaining);
+          }
+        }
+
+        lastStartedAt = Date.now();
+      });
+
+      await queue;
+    },
+  };
 }
 
 function createPromptFileUpdater(filePath: string, sourceLines: string[]) {
@@ -232,23 +262,60 @@ async function main(): Promise<void> {
   let done = 0;
   let successCount = 0;
   let failCount = 0;
+  const imageStartPacer = createImageStartPacer(5000);
+  const sleep = (ms: number) =>
+    new Promise<void>((resolve) => setTimeout(resolve, ms));
 
   const limit = pLimit(args.concurrency);
   const jobs = prompts.map((item, index) =>
     limit(async () => {
+      await imageStartPacer.waitTurn();
       const ordinal = index + 1;
       logger.info(
         `[${ordinal}/${prompts.length}] Prompt: ${previewPrompt(item.prompt)}`,
       );
 
       try {
-        const result = await runPromptPipeline(
-          client,
-          item.prompt,
-          ordinal,
-          runDir,
-          args.quality,
-        );
+        let lastError: unknown;
+        let result: Awaited<ReturnType<typeof runPromptPipeline>> | undefined;
+
+        for (let attempt = 1; attempt <= MAX_RETRIES_PER_PROMPT; attempt += 1) {
+          logger.info(
+            `[${ordinal}/${prompts.length}] Attempt ${attempt}/${MAX_RETRIES_PER_PROMPT}`,
+          );
+
+          try {
+            result = await runPromptPipeline(
+              client,
+              item.prompt,
+              ordinal,
+              runDir,
+              args.quality,
+            );
+            break;
+          } catch (error) {
+            lastError = error;
+            const reason =
+              error instanceof Error ? error.message : String(error);
+
+            if (attempt < MAX_RETRIES_PER_PROMPT) {
+              logger.warn(
+                `[${ordinal}/${prompts.length}] Attempt ${attempt} failed: ${reason}. Retrying...`,
+              );
+              await sleep(RETRY_DELAY_MS);
+              continue;
+            }
+
+            throw lastError;
+          }
+        }
+
+        if (!result) {
+          throw new Error(
+            `Failed to generate image for prompt ${ordinal} after ${MAX_RETRIES_PER_PROMPT} attempts.`,
+          );
+        }
+
         successCount += 1;
 
         if (promptFileUpdater) {
@@ -262,7 +329,11 @@ async function main(): Promise<void> {
         return result;
       } catch (error) {
         failCount += 1;
-        throw error;
+        const reason =
+          error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Failed to generate image for prompt ${ordinal}: ${reason}`,
+        );
       } finally {
         done += 1;
         logger.info(

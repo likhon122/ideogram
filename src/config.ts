@@ -1,6 +1,13 @@
 import dotenv from "dotenv";
+import os from "node:os";
+import path from "node:path";
 
 dotenv.config();
+
+function defaultOutputDir(): string {
+  const downloadsDir = path.join(os.homedir(), "Downloads");
+  return path.join(downloadsDir, "ideogram");
+}
 
 function required(name: string): string {
   const value = process.env[name]?.trim();
@@ -117,7 +124,11 @@ export const config = {
   pollIntervalMs: num("IDEOGRAM_POLL_INTERVAL_MS", 3000),
   requestTimeoutMs: num("IDEOGRAM_REQUEST_TIMEOUT_MS", 120000),
   maxWaitMs: num("IDEOGRAM_MAX_WAIT_MS", 360000),
-  outputDir: optional("IDEOGRAM_OUTPUT_DIR", "outputs"),
+  outputDir: optional("IDEOGRAM_OUTPUT_DIR", defaultOutputDir()),
+
+  enableImageMetadata: bool("IDEOGRAM_ENABLE_IMAGE_METADATA", true),
+  exiftoolBin: optional("IDEOGRAM_EXIFTOOL_BIN", "exiftool"),
+  metadataMaxKeywords: num("IDEOGRAM_METADATA_MAX_KEYWORDS", 40),
 
   extraHeaders: jsonHeaders("IDEOGRAM_EXTRA_HEADERS_JSON"),
 };

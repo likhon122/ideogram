@@ -7,7 +7,9 @@ This project reproduces the same API flow captured in `ideogram.ai.har`:
 3. Trigger super-res upscale: `POST /api/images/sample` with `parent.type = "SUPER_RES"`
 4. Download image: `GET /api/download/response/{responseId}/image?resolution=4K|8K`
 
-Outputs are saved locally inside this workspace under `outputs/<run_timestamp>/`.
+Outputs are saved by default to your OS download folder under `Downloads/ideogram/<quality>/`.
+Set `IDEOGRAM_OUTPUT_DIR` to override this location.
+After each download, the runner can also embed searchable metadata (title, description, and keywords) into the saved image file.
 
 ## Project Structure
 
@@ -99,10 +101,20 @@ npm run generate -- --prompt "Prompt one" --prompt "Prompt two" --concurrency 2
 
 Each run creates:
 
-- Images: `outputs/<timestamp>/*.png|jpg|webp`
-- Run report: `outputs/<timestamp>/run-report.json`
+- Images: `<output_dir>/<quality>/*.png|jpg|webp`
+- Run report: `<output_dir>/<quality>/run-report.json`
 
 The report includes success/failure summary and all request/response IDs for traceability.
+
+## Image Metadata
+
+By default, each downloaded image is saved first and then metadata is embedded using ExifTool.
+
+- `IDEOGRAM_ENABLE_IMAGE_METADATA=true|false` toggles metadata embedding.
+- `IDEOGRAM_EXIFTOOL_BIN` sets the executable path (default: `exiftool`).
+- `IDEOGRAM_METADATA_MAX_KEYWORDS` sets max generated keywords from prompt text.
+
+If ExifTool is missing, the image is still saved normally and the run continues.
 
 ## Notes
 

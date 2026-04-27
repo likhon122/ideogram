@@ -1,4 +1,3 @@
-import { promises as fs } from "node:fs";
 import path from "node:path";
 import { config } from "../config.js";
 import { IdeogramClient } from "../client/ideogramClient.js";
@@ -8,6 +7,7 @@ import {
   ensureDir,
   sanitizeFilename,
 } from "../utils/files.js";
+import { writeImageWithMetadata } from "../utils/imageMetadata.js";
 import { type DownloadResolution } from "../client/ideogramClient.js";
 import {
   type GenerateImagePayload,
@@ -195,7 +195,25 @@ export async function runPromptPipeline(
     `${String(promptIndex).padStart(3, "0")}_${base}_${quality.toLowerCase()}.${ext}`,
   );
 
-  await fs.writeFile(outputPath, download.bytes);
+  const metadataResult = await writeImageWithMetadata({
+    outputPath,
+    bytes: download.bytes,
+    prompt,
+    enabled: config.enableImageMetadata,
+    exiftoolBin: config.exiftoolBin,
+    maxKeywords: config.metadataMaxKeywords,
+  });
+
+  if (metadataResult.metadataApplied) {
+    logger.info(
+      `[${promptIndex}] Metadata applied (${metadataResult.metadata.keywords.length} keywords)`,
+    );
+  } else if (metadataResult.reason !== "metadata disabled") {
+    logger.warn(
+      `[${promptIndex}] Metadata skipped: ${metadataResult.reason ?? "unknown reason"}`,
+    );
+  }
+
   const seconds = Math.max(
     1,
     Math.round((Date.now() - downloadStartedAt) / 1000),

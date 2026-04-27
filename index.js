@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import dotenv from "dotenv";
 import { chromium } from "playwright-core";
@@ -32,6 +33,11 @@ function num(name, fallback) {
     throw new Error(`Invalid numeric environment variable: ${name}=${value}`);
   }
   return parsed;
+}
+
+function defaultOutputDir() {
+  const downloadsDir = path.join(os.homedir(), "Downloads");
+  return path.join(downloadsDir, "ideogram");
 }
 
 const config = {
@@ -87,7 +93,7 @@ const config = {
   pollIntervalMs: num("IDEOGRAM_POLL_INTERVAL_MS", 3000),
   requestTimeoutMs: num("IDEOGRAM_REQUEST_TIMEOUT_MS", 120000),
   maxWaitMs: num("IDEOGRAM_MAX_WAIT_MS", 360000),
-  outputDir: optional("IDEOGRAM_OUTPUT_DIR", "outputs"),
+  outputDir: optional("IDEOGRAM_OUTPUT_DIR", defaultOutputDir()),
   enableQuotaPreflight: bool("IDEOGRAM_ENABLE_QUOTA_PREFLIGHT", true),
   enableBrowserFallback: bool("IDEOGRAM_ENABLE_BROWSER_FALLBACK", true),
   browserHeadless: bool("IDEOGRAM_BROWSER_HEADLESS", false),
