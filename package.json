@@ -9,6 +9,8 @@
     "start": "tsx src/index.ts",
     "start:4k": "tsx src/index.ts 4k",
     "start:8k": "tsx src/index.ts 8k",
+    "upload-download:4k": "tsx src/index.ts upload-download:4k",
+    "upload-download:8k": "tsx src/index.ts upload-download:8k",
     "generate": "tsx src/index.ts",
     "quota-test": "node index.js"
   },

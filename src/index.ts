@@ -3,7 +3,7 @@ import path from "node:path";
 import pLimit from "p-limit";
 import { config } from "./config.js";
 import { IdeogramClient } from "./client/ideogramClient.js";
-import { runPromptPipeline, type QualityMode } from "./core/workflow.js";
+import { runPromptPipeline, runUploadUpscalePipeline, type QualityMode } from "./core/workflow.js";
 import { logger } from "./utils/logger.js";
 import {
   detectPromptFile,
@@ -15,8 +15,11 @@ import {
 type CliArgs = {
   promptsFile?: string;
   prompt?: string[];
+  image?: string;
+  imagesDir?: string;
   concurrency: number;
   quality: QualityMode;
+  mode: "generate" | "upload-download";
 };
 
 type PromptItem = {
@@ -30,7 +33,7 @@ type PromptCollection = {
   sourceLines?: string[];
 };
 
-const MAX_RETRIES_PER_PROMPT = 10;
+const MAX_RETRIES_PER_PROMPT = config.maxRetriesPerPrompt;
 const RETRY_DELAY_MS = 2000;
 
 function normalizeQuality(value: string | undefined): QualityMode | undefined {
@@ -39,8 +42,8 @@ function normalizeQuality(value: string | undefined): QualityMode | undefined {
   }
 
   const normalized = value.trim().toLowerCase().replace(/\s+/g, "");
-  if (normalized === "4k") return "4K";
-  if (normalized === "8k") return "8K";
+  if (normalized === "4k" || normalized.includes("start:4k") || normalized.includes("upload-download:4k")) return "4K";
+  if (normalized === "8k" || normalized.includes("start:8k") || normalized.includes("upload-download:8k")) return "8K";
 
   // Supports tokens passed as positional extras, e.g. `npm start start:8k`.
   if (normalized.endsWith("4k")) return "4K";
@@ -75,6 +78,7 @@ function parseArgs(argv: string[]): CliArgs {
     concurrency: 1,
     prompt: [],
     quality: "4K",
+    mode: "generate",
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -93,6 +97,20 @@ function parseArgs(argv: string[]): CliArgs {
       continue;
     }
 
+    if (token === "--image" && value) {
+      args.image = value;
+      args.mode = "upload-download";
+      i += 1;
+      continue;
+    }
+
+    if (token === "--images-dir" && value) {
+      args.imagesDir = value;
+      args.mode = "upload-download";
+      i += 1;
+      continue;
+    }
+
     if (token === "--concurrency" && value) {
       args.concurrency = Number(value);
       i += 1;
@@ -107,6 +125,10 @@ function parseArgs(argv: string[]): CliArgs {
       args.quality = quality;
       i += 1;
       continue;
+    }
+
+    if (token.includes("upload-download")) {
+      args.mode = "upload-download";
     }
 
     const positionalQuality = normalizeQuality(token);
@@ -222,23 +244,52 @@ async function collectPrompts(args: CliArgs): Promise<PromptCollection> {
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
-  const promptCollection = await collectPrompts(args);
-  const prompts = promptCollection.prompts;
+  
+  // Logic for generating images or uploading/upscaling images
+  let itemsToProcess: PromptItem[] = [];
+  let promptFileUpdater: ReturnType<typeof createPromptFileUpdater> | undefined = undefined;
+  
+  if (args.mode === "upload-download") {
+    if (args.image) {
+      itemsToProcess.push({ prompt: args.image }); // Here prompt field stores image path
+    } else if (args.imagesDir) {
+      const files = await fs.readdir(args.imagesDir);
+      for (const file of files) {
+        if (file.match(/\.(png|jpg|jpeg|webp)$/i)) {
+          itemsToProcess.push({ prompt: path.join(args.imagesDir, file) });
+        }
+      }
+    }
+    if (itemsToProcess.length === 0) {
+      throw new Error("No images found for upload. Use --image or --images-dir.");
+    }
+  } else {
+    const promptCollection = await collectPrompts(args);
+    itemsToProcess = promptCollection.prompts;
+    
+    promptFileUpdater = promptCollection.promptFilePath && promptCollection.sourceLines
+      ? createPromptFileUpdater(
+          promptCollection.promptFilePath,
+          promptCollection.sourceLines,
+        )
+      : undefined;
+
+    if (itemsToProcess.length === 0) {
+      throw new Error("No prompts found. Use --prompt or --prompts-file.");
+    }
+    if (promptCollection.promptFilePath) {
+      logger.info(`Prompt file: ${promptCollection.promptFilePath}`);
+    }
+  }
+
   const runDir = path.resolve(config.outputDir, args.quality.toLowerCase());
   const reportPath = path.join(runDir, "run-report.json");
 
-  if (prompts.length === 0) {
-    throw new Error("No prompts found. Use --prompt or --prompts-file.");
-  }
-
-  logger.section("Ideogram Image Runner");
-  logger.info(`Images queued: ${prompts.length}`);
+  logger.section(`Ideogram ${args.mode === "upload-download" ? "Upload & Upscale" : "Image Generation"} Runner`);
+  logger.info(`Items queued: ${itemsToProcess.length}`);
   logger.info(`Concurrency: ${args.concurrency}`);
   logger.info(`Quality mode: ${args.quality}`);
   logger.info(`Output folder: ${runDir}`);
-  if (promptCollection.promptFilePath) {
-    logger.info(`Prompt file: ${promptCollection.promptFilePath}`);
-  }
   logger.line();
 
   const client = new IdeogramClient(config);
@@ -251,14 +302,6 @@ async function main(): Promise<void> {
 
   await ensureDir(runDir);
 
-  const promptFileUpdater =
-    promptCollection.promptFilePath && promptCollection.sourceLines
-      ? createPromptFileUpdater(
-          promptCollection.promptFilePath,
-          promptCollection.sourceLines,
-        )
-      : undefined;
-
   let done = 0;
   let successCount = 0;
   let failCount = 0;
@@ -267,12 +310,13 @@ async function main(): Promise<void> {
     new Promise<void>((resolve) => setTimeout(resolve, ms));
 
   const limit = pLimit(args.concurrency);
-  const jobs = prompts.map((item, index) =>
+  const jobs = itemsToProcess.map((item, index) =>
     limit(async () => {
       await imageStartPacer.waitTurn();
       const ordinal = index + 1;
+      const displayStr = args.mode === "upload-download" ? path.basename(item.prompt) : previewPrompt(item.prompt);
       logger.info(
-        `[${ordinal}/${prompts.length}] Prompt: ${previewPrompt(item.prompt)}`,
+        `[${ordinal}/${itemsToProcess.length}] Processing: ${displayStr}`,
       );
 
       try {
@@ -281,17 +325,27 @@ async function main(): Promise<void> {
 
         for (let attempt = 1; attempt <= MAX_RETRIES_PER_PROMPT; attempt += 1) {
           logger.info(
-            `[${ordinal}/${prompts.length}] Attempt ${attempt}/${MAX_RETRIES_PER_PROMPT}`,
+            `[${ordinal}/${itemsToProcess.length}] Attempt ${attempt}/${MAX_RETRIES_PER_PROMPT}`,
           );
 
           try {
-            result = await runPromptPipeline(
-              client,
-              item.prompt,
-              ordinal,
-              runDir,
-              args.quality,
-            );
+            if (args.mode === "upload-download") {
+              result = await runUploadUpscalePipeline(
+                client,
+                item.prompt,
+                ordinal,
+                runDir,
+                args.quality,
+              );
+            } else {
+              result = await runPromptPipeline(
+                client,
+                item.prompt,
+                ordinal,
+                runDir,
+                args.quality,
+              );
+            }
             break;
           } catch (error) {
             lastError = error;
@@ -300,7 +354,7 @@ async function main(): Promise<void> {
 
             if (attempt < MAX_RETRIES_PER_PROMPT) {
               logger.warn(
-                `[${ordinal}/${prompts.length}] Attempt ${attempt} failed: ${reason}. Retrying...`,
+                `[${ordinal}/${itemsToProcess.length}] Attempt ${attempt} failed: ${reason}. Retrying...`,
               );
               await sleep(RETRY_DELAY_MS);
               continue;
@@ -321,11 +375,11 @@ async function main(): Promise<void> {
         if (promptFileUpdater) {
           await promptFileUpdater.markCompleted(item.sourceLineIndex);
           logger.info(
-            `[${ordinal}/${prompts.length}] Prompt removed from file. Remaining: ${promptFileUpdater.remainingPromptCount()}`,
+            `[${ordinal}/${itemsToProcess.length}] Prompt removed from file. Remaining: ${promptFileUpdater.remainingPromptCount()}`,
           );
         }
 
-        logger.success(`[${ordinal}/${prompts.length}] Image created`);
+        logger.success(`[${ordinal}/${itemsToProcess.length}] Item completed successfully`);
         return result;
       } catch (error) {
         failCount += 1;
@@ -337,7 +391,7 @@ async function main(): Promise<void> {
       } finally {
         done += 1;
         logger.info(
-          `Progress: ${done}/${prompts.length} | Success: ${successCount} | Failed: ${failCount}`,
+          `Progress: ${done}/${itemsToProcess.length} | Success: ${successCount} | Failed: ${failCount}`,
         );
       }
     }),
@@ -367,7 +421,7 @@ async function main(): Promise<void> {
     )
     .map((entry) => ({
       promptIndex: entry.index + 1,
-      prompt: prompts[entry.index].prompt,
+      item: itemsToProcess[entry.index].prompt,
       error:
         entry.result.reason instanceof Error
           ? entry.result.reason.message
@@ -377,7 +431,7 @@ async function main(): Promise<void> {
   await writeJson(reportPath, {
     createdAt: new Date().toISOString(),
     runDir,
-    total: prompts.length,
+    total: itemsToProcess.length,
     successCount: successes.length,
     failureCount: failures.length,
     successes,

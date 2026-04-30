@@ -237,6 +237,92 @@ export class BrowserTransport {
     throw new Error("Browser fallback POST exhausted retries.");
   }
 
+  async postMultipart<T>(
+    path: string,
+    fileBase64: string,
+    fileName: string,
+    mimeType: string,
+    additionalData: Record<string, string>,
+    headers: HeaderMap,
+  ): Promise<T> {
+    await this.init();
+    if (!this.page) {
+      throw new Error("Browser page not initialized.");
+    }
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await this.page.evaluate(
+        async ({ url, requestHeaders, base64, filename, mime, formFields }) => {
+          // Convert base64 to Blob
+          const bstr = atob(base64);
+          let n = bstr.length;
+          const u8arr = new Uint8Array(n);
+          while (n--) {
+            u8arr[n] = bstr.charCodeAt(n);
+          }
+          const blob = new Blob([u8arr], { type: mime });
+
+          const formData = new FormData();
+          formData.append("file", blob, filename);
+          for (const [k, v] of Object.entries(formFields)) {
+            formData.append(k, v);
+          }
+
+          const fetchHeaders = new Headers(requestHeaders);
+          fetchHeaders.delete("content-type");
+
+          const res = await fetch(url, {
+            method: "POST",
+            headers: fetchHeaders,
+            credentials: "include",
+            body: formData,
+          });
+
+          return {
+            ok: res.ok,
+            status: res.status,
+            text: await res.text(),
+          };
+        },
+        {
+          url: `${this.cfg.apiBaseUrl}${path}`,
+          requestHeaders: cleanHeadersForBrowser(headers),
+          base64: fileBase64,
+          filename: fileName,
+          mime: mimeType,
+          formFields: additionalData,
+        },
+      );
+
+      if (response.ok) {
+        return JSON.parse(response.text) as T;
+      }
+
+      if (
+        response.status === 403 &&
+        isCloudflareBlockHtml(response.text) &&
+        attempt === 0
+      ) {
+        const cleared = await this.waitForChallengeClear();
+        if (cleared) {
+          continue;
+        }
+      }
+
+      if (response.status === 403 && isCloudflareBlockHtml(response.text)) {
+        throw new Error(
+          "Cloudflare challenge still active in browser session. Solve challenge in opened browser and retry.",
+        );
+      }
+
+      throw new Error(
+        `Browser fallback POST (multipart) failed: ${response.status} ${response.text.slice(0, 300)}`,
+      );
+    }
+
+    throw new Error("Browser fallback POST (multipart) exhausted retries.");
+  }
+
   async getJson<T>(path: string, headers: HeaderMap): Promise<T> {
     await this.init();
     if (!this.page) {

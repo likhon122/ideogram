@@ -28,8 +28,9 @@ export interface SuperResPayload {
   use_autoprompt_option: "ON" | "OFF" | "AUTO";
   sampling_speed: number;
   parent: {
-    request_id: string;
-    response_id: string;
+    request_id?: string;
+    response_id?: string;
+    image_id?: string;
     weight: number;
     type: "SUPER_RES";
   };
@@ -88,4 +89,24 @@ export interface RunResult {
   superResRequestId: string;
   superResResponseId: string;
   outputPath: string;
+}
+
+export interface UploadResponse {
+  success: boolean;
+  id: string;
+  file_name: string;
+  error_message?: string;
+  asset_id?: string;
+  canvas_transaction_id?: string;
+}
+
+export interface UploadMetadataResponse {
+  image_id: string;
+  height: number;
+  width: number;
+  image_resolution: string;
+  max_upscale_factor: number;
+  aspect_ratio?: string;
+  format?: string;
+  upload_type?: string;
 }

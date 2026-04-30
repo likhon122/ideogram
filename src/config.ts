@@ -131,6 +131,7 @@ export const config = {
   metadataMaxKeywords: num("IDEOGRAM_METADATA_MAX_KEYWORDS", 40),
 
   extraHeaders: jsonHeaders("IDEOGRAM_EXTRA_HEADERS_JSON"),
+  maxRetriesPerPrompt: num("IDEOGRAM_MAX_RETRIES", 10),
 };
 
 export type AppConfig = typeof config;

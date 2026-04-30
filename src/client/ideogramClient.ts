@@ -1,5 +1,7 @@
 import axios, { AxiosError, AxiosInstance } from "axios";
 import { randomUUID } from "node:crypto";
+import { createReadStream, promises as fs } from "node:fs";
+import path from "node:path";
 import { config, type AppConfig } from "../config.js";
 import { logger } from "../utils/logger.js";
 import { BrowserTransport } from "./browserTransport.js";
@@ -9,6 +11,8 @@ import {
   type RetrieveRequestsResponse,
   type SampleResponse,
   type SuperResPayload,
+  type UploadResponse,
+  type UploadMetadataResponse,
 } from "../types/ideogram.js";
 
 export type DownloadResolution = "4K" | "8K";
@@ -122,6 +126,31 @@ export class IdeogramClient {
     return this.browserTransport.postJson<T>(path, payload, headers);
   }
 
+  private async withBrowserFallbackPostMultipart<T>(
+    reqPath: string,
+    fileBase64: string,
+    fileName: string,
+    mimeType: string,
+    additionalData: Record<string, string>,
+    refererPath: string,
+    originalError: unknown,
+  ): Promise<T> {
+    if (!this.shouldUseBrowserFallback(originalError)) {
+      throw originalError;
+    }
+
+    this.warnFallbackOnce();
+    const headers = this.headers(refererPath, false);
+    return this.browserTransport.postMultipart<T>(
+      reqPath,
+      fileBase64,
+      fileName,
+      mimeType,
+      additionalData,
+      headers
+    );
+  }
+
   private async withBrowserFallbackGetJson<T>(
     path: string,
     refererPath: string,
@@ -172,6 +201,65 @@ export class IdeogramClient {
       );
     }
   }
+
+  async uploadImage(filePath: string): Promise<UploadResponse> {
+    const reqPath = "/api/uploads/upload";
+    const refererPath = "/library/my-images";
+    
+    // Using axios support for multipart/form-data
+    const payload = {
+      file: createReadStream(filePath),
+      preserve_alpha: "true",
+      upload_type: "UPLOAD"
+    };
+
+    try {
+      const { data } = await this.http.postForm<UploadResponse>(reqPath, payload, {
+        headers: this.headers(refererPath, false),
+      });
+      return data;
+    } catch (error) {
+      if (this.shouldUseBrowserFallback(error)) {
+        logger.warn("Cloudflare challenge detected; attempting browser fallback for multipart upload.");
+        
+        // Read file as base64
+        const fileData = await fs.readFile(filePath);
+        const base64 = fileData.toString('base64');
+        const filename = path.basename(filePath);
+        const mime = filePath.toLowerCase().endsWith('png') ? 'image/png' : 'image/jpeg';
+        
+        return this.withBrowserFallbackPostMultipart<UploadResponse>(
+          reqPath,
+          base64,
+          filename,
+          mime,
+          { preserve_alpha: "true", upload_type: "UPLOAD" },
+          refererPath,
+          error
+        );
+      }
+      throw error;
+    }
+  }
+
+  async retrieveUploadMetadata(imageId: string): Promise<UploadMetadataResponse> {
+    const path = `/api/images/retrieve_metadata_upload_id/${imageId}`;
+    const refererPath = "/library/my-images";
+
+    try {
+      const { data } = await this.http.get<UploadMetadataResponse>(path, {
+        headers: this.headers(refererPath, false),
+      });
+      return data;
+    } catch (error) {
+      return this.withBrowserFallbackGetJson<UploadMetadataResponse>(
+        path,
+        refererPath,
+        error,
+      );
+    }
+  }
+
 
   async submitGenerate(payload: GenerateImagePayload): Promise<SampleResponse> {
     const path = "/api/images/sample";

@@ -98,7 +98,26 @@ export async function runPromptPipeline(
     ...(config.categoryId ? { category_id: config.categoryId } : {}),
   };
 
-  const generated = await client.submitGenerate(generatePayload);
+  let generated;
+  for (let attempt = 1; attempt <= 20; attempt++) {
+    try {
+      generated = await client.submitGenerate(generatePayload);
+      break;
+    } catch (error) {
+      const errStr = error instanceof Error ? error.message : String(error);
+      if (errStr.includes("inflight_limit")) {
+        logger.warn(`[${promptIndex}] Inflight limit reached. Waiting 10s before retrying generation (Attempt ${attempt}/20)...`);
+        await sleep(10000);
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  if (!generated) {
+    throw new Error(`[${promptIndex}] Failed to submit generation after multiple retries due to inflight limits.`);
+  }
+
   const initialRequestId = generated.request_id;
 
   const finalInitialStatus = await waitUntilCompleted(
@@ -145,10 +164,29 @@ export async function runPromptPipeline(
     ...(config.categoryId ? { category_id: config.categoryId } : {}),
   };
 
-  const superRes = await client.submitSuperRes(
-    initialRequestId,
-    superResPayload,
-  );
+  let superRes;
+  for (let attempt = 1; attempt <= 20; attempt++) {
+    try {
+      superRes = await client.submitSuperRes(
+        initialRequestId,
+        superResPayload,
+      );
+      break;
+    } catch (error) {
+      const errStr = error instanceof Error ? error.message : String(error);
+      if (errStr.includes("inflight_limit")) {
+        logger.warn(`[${promptIndex}] Inflight limit reached. Waiting 10s before retrying upscale (Attempt ${attempt}/20)...`);
+        await sleep(10000);
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  if (!superRes) {
+    throw new Error(`[${promptIndex}] Failed to submit upscale after multiple retries due to inflight limits.`);
+  }
+
   const superResRequestId = superRes.request_id;
 
   const finalSuperStatus = await waitUntilCompleted(
@@ -226,6 +264,164 @@ export async function runPromptPipeline(
     prompt,
     initialRequestId,
     initialResponseId: initialResponse.response_id,
+    superResRequestId,
+    superResResponseId: superResResponse.response_id,
+    outputPath,
+  };
+}
+
+export async function runUploadUpscalePipeline(
+  client: IdeogramClient,
+  imagePath: string,
+  promptIndex: number,
+  outputRunDir: string,
+  quality: QualityMode,
+): Promise<RunResult> {
+  const filename = path.basename(imagePath);
+  logger.info(`[${promptIndex}] Uploading image: ${filename}`);
+
+  const uploadResult = await client.uploadImage(imagePath);
+  if (!uploadResult.success || !uploadResult.id) {
+    throw new Error(`[${promptIndex}] Image upload failed: ${uploadResult.error_message || "Unknown error"}`);
+  }
+  const imageId = uploadResult.id;
+  logger.info(`[${promptIndex}] Uploaded successfully (image_id=${imageId})`);
+
+  logger.info(`[${promptIndex}] Retrieving metadata for uploaded image...`);
+  const metadata = await client.retrieveUploadMetadata(imageId);
+
+  logger.info(`[${promptIndex}] Upscaling uploaded image...`);
+
+  const upscaleFactor = quality === "8K" ? config.upscaleFactor8k : config.upscaleFactor;
+
+  const superResPayload: SuperResPayload = {
+    prompt: filename, // Default prompt to filename since we don't have a prompt for uploaded image
+    user_id: config.userId,
+    private: config.privateGeneration,
+    model_version: config.superResModelVersion,
+    model_uri: config.superResModelUri,
+    use_autoprompt_option: config.superResUseAutopromptOption,
+    sampling_speed: config.samplingSpeed,
+    parent: {
+      image_id: imageId,
+      weight: 100,
+      type: "SUPER_RES",
+    },
+    upscale_factor: upscaleFactor,
+    resolution: {
+      width: metadata.width ?? config.resolutionWidth,
+      height: metadata.height ?? config.resolutionHeight,
+    },
+    num_images: 1,
+    style_type: config.styleType,
+    internal: config.superResInternal,
+    ...(config.categoryId ? { category_id: config.categoryId } : {}),
+  };
+
+  // Upscale request uses image_id as the parent
+  // We can just pass the imageId as the first argument to submitSuperRes.
+  // Wait, the refererPath for submitSuperRes currently uses `parentRequestId`.
+  // Let's modify `submitSuperRes` in the client if needed or just use `imageId`.
+  let superRes;
+  for (let attempt = 1; attempt <= 20; attempt++) {
+    try {
+      superRes = await client.submitSuperRes(
+        imageId,
+        superResPayload,
+      );
+      break;
+    } catch (error) {
+      const errStr = error instanceof Error ? error.message : String(error);
+      if (errStr.includes("inflight_limit")) {
+        logger.warn(`[${promptIndex}] Inflight limit reached. Waiting 10s before retrying upscale (Attempt ${attempt}/20)...`);
+        await sleep(10000);
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  if (!superRes) {
+    throw new Error(`[${promptIndex}] Failed to submit upscale after multiple retries due to inflight limits.`);
+  }
+
+  const superResRequestId = superRes.request_id;
+
+  const finalSuperStatus = await waitUntilCompleted(
+    client,
+    superResRequestId,
+    `/g/${imageId}/0`,
+    "Super-res",
+    promptIndex,
+  );
+
+  const superResResponse = finalSuperStatus.responses[0];
+  if (!superResResponse?.response_id) {
+    throw new Error(`[${promptIndex}] Missing response_id from super-res.`);
+  }
+
+  logger.info(`[${promptIndex}] Downloading ${quality} image...`);
+  const downloadStartedAt = Date.now();
+  let lastDownloadProgressBucket = -1;
+
+  const download = await client.downloadImage(
+    superResResponse.response_id,
+    imageId,
+    quality as DownloadResolution,
+    (progress) => {
+      if (progress.percent == null) {
+        return;
+      }
+
+      const bucket = Math.floor(progress.percent / 10);
+      if (bucket <= lastDownloadProgressBucket && progress.percent < 100) {
+        return;
+      }
+
+      lastDownloadProgressBucket = bucket;
+      logger.info(`[${promptIndex}] Download ${quality}: ${progress.percent}%`);
+    },
+  );
+  await ensureDir(outputRunDir);
+
+  const ext = contentTypeToExtension(download.contentType);
+  const base = sanitizeFilename(filename);
+  const outputPath = path.join(
+    outputRunDir,
+    `${String(promptIndex).padStart(3, "0")}_${base}_${quality.toLowerCase()}.${ext}`,
+  );
+
+  const metadataResult = await writeImageWithMetadata({
+    outputPath,
+    bytes: download.bytes,
+    prompt: filename,
+    enabled: config.enableImageMetadata,
+    exiftoolBin: config.exiftoolBin,
+    maxKeywords: config.metadataMaxKeywords,
+  });
+
+  if (metadataResult.metadataApplied) {
+    logger.info(
+      `[${promptIndex}] Metadata applied (${metadataResult.metadata.keywords.length} keywords)`,
+    );
+  } else if (metadataResult.reason !== "metadata disabled") {
+    logger.warn(
+      `[${promptIndex}] Metadata skipped: ${metadataResult.reason ?? "unknown reason"}`,
+    );
+  }
+
+  const seconds = Math.max(
+    1,
+    Math.round((Date.now() - downloadStartedAt) / 1000),
+  );
+  logger.success(`[${promptIndex}] Download complete (${seconds}s)`);
+  logger.info(`[${promptIndex}] Saved: ${path.basename(outputPath)}`);
+
+  return {
+    promptIndex,
+    prompt: filename,
+    initialRequestId: imageId,
+    initialResponseId: imageId,
     superResRequestId,
     superResResponseId: superResResponse.response_id,
     outputPath,
