@@ -113,6 +113,10 @@ By default, each downloaded image is saved first and then metadata is embedded u
 - `IDEOGRAM_ENABLE_IMAGE_METADATA=true|false` toggles metadata embedding.
 - `IDEOGRAM_EXIFTOOL_BIN` sets the executable path (default: `exiftool`).
 - `IDEOGRAM_METADATA_MAX_KEYWORDS` sets max generated keywords from prompt text.
+- Title and keyword generation uses Mistral and reads keys from `.env`:
+  - `MISTRAL_API_KEYS` for a comma, semicolon, or newline separated list of keys.
+  - `MISTRAL_API_KEY` as a single-key fallback.
+  - `MISTRAL_MODEL` to override the default model (`mistral-small-latest`).
 
 If ExifTool is missing, the image is still saved normally and the run continues.
 

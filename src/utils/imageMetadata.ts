@@ -3,92 +3,76 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import axios from "axios";
+import { exiftoolPath as vendoredExiftoolPath } from "exiftool-vendored";
 import tracker from "./tracker.js";
 import { logger } from "./logger.js";
 
 const execFileAsync = promisify(execFile);
 
-// Gemini API Keys
-const GEMINI_API_KEYS = [
-  "AIzaSyAvwomqeQwWEtrDQyx1folbAosELxN41ps",
-  "AIzaSyD4UdC9Q4m9isfqY1B4yPcAksBNk6zj0XI",
-  "AIzaSyB7duRGM8HBi2JmKpVJU2uqv_85ZabWNi8",
-  "AIzaSyAUOtIQTBgNBl6-Rn5gGoNaL1fDE9AjcsU",
-  "AIzaSyC_4j-AdLJd2VXq1ry_J5FqxPi3l2iGztk",
-  "AIzaSyDNebkrmr4K4ACFGFQ0XS1f27qpNMyIKO4",
-  "AIzaSyDjps-IueZJEXcffUWVtliJmcou0kRFqYk",
-  "AIzaSyB3aeNu-K0m7NoD1M57HgleTc49omkQX4E",
-  "AIzaSyDDvst-hGsqxCv4JC2WMiEsUMpGFNiBLrY",
-  "AIzaSyB1tjQBTBiV5eD16zyazCdZnNE_8tI7zPs",
-  "AIzaSyDGu3Yjxi9BTOwcgJO0CSLlLFfQhthpX1M",
-  "AIzaSyD2kcgLGSglJUtoipzQT3k18ZVXhiRRWzo",
-  "AIzaSyAitEW4Bh62yGqtpADPJeMjvz4_zMB92Ko",
-  "AIzaSyDdpjL5lsrGSsBDR-b_gJJFUVh4iAhQ4P4",
-  "AIzaSyD0clkx2LsDY3dZK9d92xQiYRxmvvVAnk4",
-  "AIzaSyDsQzGDr7laYQQkayLtSXE0u_9q6sVmO0g",
-  "AIzaSyDTsyUKEiLfb28PvvAYHK6Ygrdk_8ZtcIw",
-  "AIzaSyChK4eC2MjhamJfuSQNbhQ252BPixpsBhg",
-  "AIzaSyAqWwpkCz5ffsgeAB1qEOnISD0Gcf0DgTU",
-  "AIzaSyDp9rSbwMlJX1Ac6Sh2cSNsaOm-1_q2ruo",
-  "AIzaSyASz4jd4hMmitWlM3iWaSlpgjBAIV-e4J0",
-  "AIzaSyA2y8iFCnPJxjbTltsG0-pKBD9YT8N8wUM",
-  "AIzaSyAZGZrfSKpwojQS2UaqizHw9v6hMAkHoxY",
-  "AIzaSyA0UsuchK4WB8P2cxczx4QJNrIaQaB2wuk",
-  "AIzaSyDce7md6Io354kuNrK_xS5KjCfvk1vfdG4",
-  "AIzaSyAHwkkhEZ-9A0ItI_VtEnksmyap1xx7d0c",
-  "AIzaSyCfEPBNEawAIkqpjv22dPzGFh2BCWOwJV8",
-  "AIzaSyBTu1qZBmGGlDUAUK0m8Ui-kfq5qEcMvMg",
-  "AIzaSyDeaGmHb1PVUtSpaahRe7sMxwXvDpYVkQE",
-  "AIzaSyAo9DsgKplE-BK6HEfg4I4z6m6351fnws4",
-  "AIzaSyCRk0Wm-jUu7i-ZOEqxs4LfFbjXmOkP4o0",
-  "AIzaSyDvfQ6ItYTqJkTbcdmGyh41nChmGq29cOw",
-  "AIzaSyC_5oB5fLCgT9jP67DAZ2fFFIut-7llJ_Q",
-  "AIzaSyDLHC5t_NsTJ0_a5Lsuy_A2oo3nMlXBb2c",
-  "AIzaSyBDnR-cfDm8WImrN1HoAvsHLy3EMlFc218",
-  "AIzaSyB0sxt0LVjJCYo7PqaQCW92XCGAdUKvoQs",
-  "AIzaSyByCa6xAD8NBvF3lSe7Kh4Uddy6qR23jNI",
-  "AIzaSyCFLuqItVK1Ppkfh8skwv5WBoltJ4R2Jqo",
-  "AIzaSyD2WyRolNY9rXNeYGc7RMC_gTF82_gTEUs",
-  "AIzaSyAQw_ZCENkAQA6xTWjR2bUufVYS93-YzCA",
-  "AIzaSyB4pWBowTswp_rCtQJtUT8BVr-n2am0Ztk",
-  "AIzaSyARpRZvfdZzjsvxsZJlFYHJ7SQIbLXQDz0",
-  "AIzaSyB1OPw8h9PzBRzfo-XgYMtASIcKRARvGT0",
-  "AIzaSyDddo9cTyH1Lg7_NmCagf5h57FFB2GA3As",
-  "AIzaSyBx2KkSZkGWGZ_78ezK0S0FImm0VKOeSDs",
-  "AIzaSyBtkgOw437Jroq8p9WpgFnLvf9JzFy6d1s",
-  "AIzaSyAEWpAtILvOOvBxy8BulCZLiAzD11bPNoA",
-  "AIzaSyBrzACBni7U63aI-ep9l_zSkGyZbdYS8WU",
-  "AIzaSyCgcw9c346KOo8FyD40yLqQH7dD1pyv12k"
-];
+function parseApiKeys(rawValue: string): string[] {
+  return Array.from(
+    new Set(
+      rawValue
+        .split(/[\n,;]+/)
+        .map((value) => value.trim())
+        .filter(Boolean),
+    ),
+  );
+}
 
-const GEMINI_URL =
-  "https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash-lite:generateContent";
+const MISTRAL_API_KEYS = parseApiKeys(
+  process.env.MISTRAL_API_KEYS || process.env.MISTRAL_API_KEY || "",
+);
+const MISTRAL_URL = "https://api.mistral.ai/v1/chat/completions";
+const MISTRAL_MODEL = process.env.MISTRAL_MODEL || "mistral-small-latest";
 
 let currentKeyIndex = 0;
 const failedKeys = new Set<number>();
-let lastGeminiCall = 0;
-const GEMINI_DELAY_MS = 3000;
+let lastMistralCall = 0;
+const MISTRAL_DELAY_MS = 3000;
 
 function getNextApiKey(): string | null {
-  if (failedKeys.size >= GEMINI_API_KEYS.length) {
+  if (MISTRAL_API_KEYS.length === 0 || failedKeys.size >= MISTRAL_API_KEYS.length) {
     return null;
   }
 
   let attempts = 0;
-  while (attempts < GEMINI_API_KEYS.length) {
+  while (attempts < MISTRAL_API_KEYS.length) {
     if (!failedKeys.has(currentKeyIndex)) {
-      return GEMINI_API_KEYS[currentKeyIndex] ?? null;
+      return MISTRAL_API_KEYS[currentKeyIndex] ?? null;
     }
-    currentKeyIndex = (currentKeyIndex + 1) % GEMINI_API_KEYS.length;
+
+    currentKeyIndex = (currentKeyIndex + 1) % MISTRAL_API_KEYS.length;
     attempts++;
   }
 
   return null;
 }
 
-function markCurrentKeyFailed() {
+function markCurrentKeyFailed(): void {
+  if (MISTRAL_API_KEYS.length === 0) {
+    return;
+  }
+
   failedKeys.add(currentKeyIndex);
-  currentKeyIndex = (currentKeyIndex + 1) % GEMINI_API_KEYS.length;
+  currentKeyIndex = (currentKeyIndex + 1) % MISTRAL_API_KEYS.length;
+}
+
+// Groq API Key - Get free key from https://console.groq.com
+const GROQ_API_KEY = process.env.GROQ_API_KEY || "";
+
+const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
+const GROQ_MODEL = "gemma-4-26b";
+
+let lastGroqCall = 0;
+const GROQ_DELAY_MS = 1000;
+
+function validateGroqApiKey(): boolean {
+  if (!GROQ_API_KEY) {
+    logger.warn("GROQ_API_KEY environment variable not set. Please set it to use Gemma 4 26B.");
+    return false;
+  }
+  return true;
 }
 
 function generateKeywordsFallback(prompt: string, maxKeywords: number): string[] {
@@ -177,17 +161,25 @@ function normalizePrompt(prompt: string): string {
 
 export async function generateTitleAndKeywords(
   prompt: string,
-  maxKeywords: number
+  maxKeywords: number,
 ): Promise<{ title: string; keywords: string[] }> {
   const now = Date.now();
-  const elapsed = now - lastGeminiCall;
-  if (elapsed < GEMINI_DELAY_MS && lastGeminiCall > 0) {
-    await new Promise((resolve) => setTimeout(resolve, GEMINI_DELAY_MS - elapsed));
+  const elapsed = now - lastMistralCall;
+  if (elapsed < MISTRAL_DELAY_MS && lastMistralCall > 0) {
+    await new Promise((resolve) => setTimeout(resolve, MISTRAL_DELAY_MS - elapsed));
   }
-  lastGeminiCall = Date.now();
+  lastMistralCall = Date.now();
+
+  if (MISTRAL_API_KEYS.length === 0) {
+    logger.warn("MISTRAL_API_KEYS or MISTRAL_API_KEY is not set. Falling back to prompt-based metadata.");
+    return {
+      title: createTitleFallback(prompt),
+      keywords: generateKeywordsFallback(prompt, maxKeywords),
+    };
+  }
 
   let attempts = 0;
-  const maxAttempts = GEMINI_API_KEYS.length - failedKeys.size;
+  const maxAttempts = MISTRAL_API_KEYS.length - failedKeys.size;
 
   while (attempts < maxAttempts) {
     const apiKey = getNextApiKey();
@@ -195,15 +187,20 @@ export async function generateTitleAndKeywords(
 
     try {
       const response = await axios.post(
-        `${GEMINI_URL}?key=${apiKey}`,
+        MISTRAL_URL,
         {
-          contents: [
+          model: MISTRAL_MODEL,
+          messages: [
             {
-              parts: [
-                {
-                  text: `You are an Adobe Stock metadata expert. For the given generated image, generate BOTH a title and keywords in a single response.
+              role: "system",
+              content:
+                "You are an Adobe Stock metadata expert. Generate a concise stock title and a comma-separated keyword list.",
+            },
+            {
+              role: "user",
+              content: `For this generated image, produce BOTH a title and keywords in a single response.
 
-Illustration: "${prompt}"
+Prompt: "${prompt}"
 
 Rules:
 1. TITLE: A concise, SEO-friendly title under 120 characters. Descriptive and suitable for stock image search.
@@ -212,22 +209,21 @@ Rules:
 Output format (strictly follow this - no extra text):
 TITLE: <your title here>
 KEYWORDS: <keyword1, keyword2, keyword3, ...>`,
-                },
-              ],
             },
           ],
-          generationConfig: {
-            temperature: 0.4,
-            maxOutputTokens: 500,
-          },
+          temperature: 0.4,
+          max_tokens: 500,
         },
         {
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
           timeout: 30000,
-        }
+        },
       );
 
-      const text = response.data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      const text = response.data.choices?.[0]?.message?.content || "";
 
       const titleMatch = text.match(/TITLE:\s*(.+)/i);
       const keywordsMatch = text.match(/KEYWORDS:\s*(.+)/is);
@@ -245,19 +241,20 @@ KEYWORDS: <keyword1, keyword2, keyword3, ...>`,
       }
 
       if (title.length > 0 && keywords.length >= 10) {
-        tracker.trackGeminiKeyUsage(currentKeyIndex);
-        currentKeyIndex = (currentKeyIndex + 1) % GEMINI_API_KEYS.length;
-        logger.info(`Gemini API Success: Title="${title}" | ${keywords.length} keywords`);
+        tracker.trackApiKeyUsage(currentKeyIndex);
+        currentKeyIndex = (currentKeyIndex + 1) % MISTRAL_API_KEYS.length;
+        logger.info(`Mistral API Success: Title="${title}" | ${keywords.length} keywords`);
         return {
           title,
           keywords: keywords.slice(0, maxKeywords),
         };
-      } else {
-        logger.warn(`Gemini returned insufficient data (title=${title.length} chars, keywords=${keywords.length}), trying next key...`);
-        markCurrentKeyFailed();
-        attempts++;
-        continue;
       }
+
+      logger.warn(
+        `Mistral returned insufficient data (title=${title.length} chars, keywords=${keywords.length}), trying next key...`,
+      );
+      markCurrentKeyFailed();
+      attempts++;
     } catch (error: unknown) {
       if (axios.isAxiosError(error)) {
         if (error.response?.status === 429) {
@@ -268,13 +265,13 @@ KEYWORDS: <keyword1, keyword2, keyword3, ...>`,
       } else {
         logger.warn(`Key ${currentKeyIndex} failed with error, trying next key...`);
       }
+
       markCurrentKeyFailed();
       attempts++;
-      continue;
     }
   }
 
-  logger.warn(`All ${GEMINI_API_KEYS.length} Gemini API keys exhausted, using fallback`);
+  logger.warn(`All ${MISTRAL_API_KEYS.length} Mistral API keys exhausted, using fallback`);
   return {
     title: createTitleFallback(prompt),
     keywords: generateKeywordsFallback(prompt, maxKeywords),
@@ -325,11 +322,11 @@ function exiftoolArgs(
   filePath: string,
   format: MetadataFormat,
 ): string[] {
+  const joinedKeywords = metadata.keywords.join("; ");
   const args: string[] = [
     "-overwrite_original_in_place",
     "-charset",
     "utf8",
-    // Clear previous list values before appending to avoid stale keywords.
     "-XMP-dc:Subject=",
     "-IPTC:Keywords=",
     `-XMP-dc:Title=${metadata.title}`,
@@ -345,6 +342,10 @@ function exiftoolArgs(
   if (format === "jpeg" || format === "tiff" || format === "eps") {
     args.push(`-IPTC:ObjectName=${metadata.title}`);
     args.push(`-IPTC:Caption-Abstract=${metadata.description}`);
+    args.push(`-EXIF:XPTitle=${metadata.title}`);
+    args.push(`-EXIF:XPSubject=${metadata.title}`);
+    args.push(`-EXIF:XPComment=${metadata.description}`);
+    args.push(`-EXIF:XPKeywords=${joinedKeywords}`);
   }
 
   for (const keyword of metadata.keywords) {
@@ -374,7 +375,7 @@ async function verifyMetadataWritten(
   return stdout.trim().length > 0;
 }
 
-function candidateExiftoolBins(preferred: string): string[] {
+async function candidateExiftoolBins(preferred: string): Promise<string[]> {
   const seen = new Set<string>();
   const add = (value: string) => {
     const trimmed = value.trim();
@@ -387,6 +388,11 @@ function candidateExiftoolBins(preferred: string): string[] {
   add("exiftool.exe");
   add("ExifTool.exe");
   add("exiftool(-k).exe");
+  try {
+    add(await vendoredExiftoolPath());
+  } catch {
+    // Ignore vendored path lookup errors and keep trying other candidates.
+  }
   return Array.from(seen);
 }
 
@@ -406,6 +412,12 @@ export async function writeImageWithMetadata(
   const format = detectMetadataFormat(outputPath);
   await fs.writeFile(outputPath, bytes);
 
+  if (format === "png") {
+    logger.warn(
+      "PNG metadata support in Windows Properties is limited; Title/Tags visibility depends on Explorer support.",
+    );
+  }
+
   if (!enabled) {
     return {
       metadataApplied: false,
@@ -424,7 +436,8 @@ export async function writeImageWithMetadata(
 
   let lastError = "unknown metadata write error";
 
-  for (const bin of candidateExiftoolBins(exiftoolBin)) {
+  const bins = await candidateExiftoolBins(exiftoolBin);
+  for (const bin of bins) {
     try {
       await execFileAsync(bin, exiftoolArgs(metadata, outputPath, format), {
         windowsHide: true,

@@ -4,10 +4,11 @@ import { logger } from "./logger.js";
 
 interface TrackingData {
   lastUpdated: string;
-  geminiKeyUsage: Record<string, number>;
+  apiKeyUsage: Record<string, number>;
+  geminiKeyUsage?: Record<string, number>;
 }
 
-class GeminiTracker {
+class ApiKeyTracker {
   private trackingFilePath: string;
   private data: TrackingData;
 
@@ -22,9 +23,9 @@ class GeminiTracker {
         const raw = fs.readFileSync(this.trackingFilePath, "utf-8");
         const parsed = JSON.parse(raw) as TrackingData;
         
-        // Ensure geminiKeyUsage exists in case of old format
-        if (!parsed.geminiKeyUsage) {
-          parsed.geminiKeyUsage = {};
+        // Migrate older tracking files that only stored Gemini usage.
+        if (!parsed.apiKeyUsage) {
+          parsed.apiKeyUsage = parsed.geminiKeyUsage ?? {};
         }
         
         return parsed;
@@ -35,7 +36,7 @@ class GeminiTracker {
 
     return {
       lastUpdated: new Date().toISOString(),
-      geminiKeyUsage: {},
+      apiKeyUsage: {},
     };
   }
 
@@ -53,12 +54,12 @@ class GeminiTracker {
     }
   }
 
-  trackGeminiKeyUsage(keyIndex: number): void {
+  trackApiKeyUsage(keyIndex: number): void {
     const keyLabel = `key_${keyIndex}`;
-    if (!this.data.geminiKeyUsage[keyLabel]) {
-      this.data.geminiKeyUsage[keyLabel] = 0;
+    if (!this.data.apiKeyUsage[keyLabel]) {
+      this.data.apiKeyUsage[keyLabel] = 0;
     }
-    this.data.geminiKeyUsage[keyLabel]++;
+    this.data.apiKeyUsage[keyLabel]++;
     this.save();
   }
 
@@ -67,5 +68,5 @@ class GeminiTracker {
   }
 }
 
-const tracker = new GeminiTracker();
+const tracker = new ApiKeyTracker();
 export default tracker;
